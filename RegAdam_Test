@@ -1,0 +1,85 @@
+import os
+from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
+import openai
+import tempfile
+
+# Load OpenAI API key securely (e.g., from env)
+openai.api_key = os.environ['OPENAI_API_KEY']
+
+REGADAM_ID = "asst_v6GxBkutMQQGxK5qFfFs5l8x"
+VECTOR_STORE_ID = "vs_67f25a42178081919b5f962f80612121"
+
+app = FastAPI()
+
+# Allow local frontend dev
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # restrict in prod!
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/", response_class=HTMLResponse)
+async def html_form():
+    return """
+    <html><body>
+        <h2>Regada Valve Assistant</h2>
+        <form action="/ask" enctype="multipart/form-data" method="post">
+            <textarea name="question" rows="4" cols="50" placeholder="Describe your issue/question"></textarea><br>
+            Optional file: <input type="file" name="file"><br>
+            <input type="submit" value="Ask">
+        </form>
+    </body></html>
+    """
+
+@app.post("/ask")
+async def ask(
+    question: str = Form(...),
+    file: UploadFile = File(None)
+):
+    attached_file_id = None
+    # Handle file upload (optional)
+    if file:
+        # Save file temporarily
+        contents = await file.read()
+        tmp_path = tempfile.mktemp(suffix=os.path.splitext(file.filename)[-1])
+        with open(tmp_path, 'wb') as f:
+            f.write(contents)
+        # Upload to OpenAI Files endpoint
+        oai_file = openai.files.create(file=open(tmp_path, "rb"), purpose="assistants")
+        attached_file_id = oai_file.id
+        os.remove(tmp_path)
+
+    # Prepare messages for Assistant
+    client_messages = []
+    if question:
+        client_messages.append({ "role": "user", "content": question })
+
+    # Attach file if present
+    files_arg = [attached_file_id] if attached_file_id else []
+
+    # Interact with the RegAdam Assistant
+    run = openai.beta.threads.create_and_run(
+        assistant_id=REGADAM_ID,
+        thread={'messages': client_messages},
+        tool_resources={
+            'file_search': { 'vector_store_ids': [VECTOR_STORE_ID] }
+        },
+        additional_kwargs={"attachments": files_arg} if files_arg else {}
+    )
+
+    # Poll for completion
+    import time
+    while True:
+        run_status = openai.beta.threads.runs.retrieve(run.thread_id, run.id)
+        if run_status.status in ["completed", "failed"]:
+            break
+        time.sleep(1)
+    # Retrieve the answer
+    msgs = openai.beta.threads.messages.list(run.thread_id)
+    # Take latest assistant message
+    answer = next((m.content[0].text.value for m in reversed(msgs.data) if m.role=="assistant"), "[No answer returned]")
+    return HTMLResponse(content=f"<h3>Question:</h3><p>{question}</p><h3>Assistant Response:</h3><p>{answer}</p><a href='/'>Back</a>")
