@@ -28,10 +28,22 @@
 
 # OS generated files #
 ######################
-.DS_Store
-.DS_Store?
 ._*
 .Spotlight-V100
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Python virtual environment
+venv/
+
+# Environment variables file
+.env
+
+# macOS system files
+.DS_Store
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
